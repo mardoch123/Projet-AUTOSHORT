@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect } from 'react';
 import { Sidebar } from './components/Sidebar';
 import { CreateStudio } from './components/CreateStudio';
@@ -20,9 +19,14 @@ const App: React.FC = () => {
       return () => window.removeEventListener('popstate', handlePopState);
   }, []);
 
+  // Normalize path (remove trailing slash) to ensure /privacy/ works like /privacy
+  const normalizedPath = currentPath.endsWith('/') && currentPath.length > 1 
+      ? currentPath.slice(0, -1) 
+      : currentPath;
+
   // Return Legal Pages immediately if path matches
-  if (currentPath === '/privacy') return <PrivacyPolicy />;
-  if (currentPath === '/terms') return <TermsOfService />;
+  if (normalizedPath === '/privacy') return <PrivacyPolicy />;
+  if (normalizedPath === '/terms') return <TermsOfService />;
 
   const [activeTab, setActiveTab] = useState('create');
   
@@ -32,7 +36,13 @@ const App: React.FC = () => {
       return saved ? parseInt(saved) : 0;
   });
 
-  const [jobs, setJobs] = useState<VideoJob[]>([]);
+  const [jobs, setJobs] = useState<VideoJob[]>(() => {
+      // Restore jobs if available
+      try {
+          const savedJobs = localStorage.getItem('autoShorts_jobs');
+          return savedJobs ? JSON.parse(savedJobs) : [];
+      } catch (e) { return []; }
+  });
   
   // Auth Tokens
   const [tiktokToken, setTiktokToken] = useState<string | null>(() => localStorage.getItem('tiktok_token'));
@@ -69,6 +79,9 @@ const App: React.FC = () => {
 
   // 2. PERSISTENCE EFFECTS (Auto-save on change)
   useEffect(() => { localStorage.setItem('autoShorts_count', totalVideos.toString()); }, [totalVideos]);
+  
+  // Save Jobs persistently
+  useEffect(() => { localStorage.setItem('autoShorts_jobs', JSON.stringify(jobs)); }, [jobs]);
   
   useEffect(() => { 
       if (tiktokToken) localStorage.setItem('tiktok_token', tiktokToken); 

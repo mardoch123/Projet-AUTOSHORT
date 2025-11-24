@@ -3,20 +3,43 @@ import { MODELS, SYSTEM_INSTRUCTION_SCRIPT, RESPONSE_SCHEMA, VIRAL_HOOKS, VIRAL_
 
 // --- API KEY ROTATION LOGIC ---
 
+// Helper pour accéder à l'environnement de manière sécurisée (évite le crash "process is not defined" dans le navigateur)
+const getEnvVar = (key: string): string | undefined => {
+  try {
+    // Vérifie si process existe (Node.js) ou si c'est injecté par le build (Vite/Webpack)
+    if (typeof process !== 'undefined' && process.env) {
+      return process.env[key];
+    }
+    // Fallback pour certains environnements Vite récents
+    // @ts-ignore
+    if (typeof import.meta !== 'undefined' && import.meta.env) {
+      // @ts-ignore
+      return import.meta.env[`VITE_${key}`] || import.meta.env[key];
+    }
+  } catch (e) {
+    return undefined;
+  }
+  return undefined;
+};
+
 // Récupération des clés depuis l'environnement. 
 // Supporte soit une liste séparée par des virgules (API_KEYS), soit une clé unique (API_KEY)
 const getAvailableKeys = (): string[] => {
-  const keysString = process.env.API_KEYS || process.env.API_KEY || "";
+  const keysString = getEnvVar('API_KEYS') || getEnvVar('API_KEY') || "";
   return keysString.split(',').map(k => k.trim()).filter(k => k.length > 0);
 };
 
 const ALL_KEYS = getAvailableKeys();
 
 // Index global pour la session (commence aléatoirement pour répartir la charge si plusieurs utilisateurs)
-let currentKeyIndex = Math.floor(Math.random() * ALL_KEYS.length);
+let currentKeyIndex = Math.floor(Math.random() * (ALL_KEYS.length || 1));
 
 const getNextKey = (): string => {
-  if (ALL_KEYS.length === 0) throw new Error("Aucune clé API configurée (API_KEYS ou API_KEY manquant).");
+  if (ALL_KEYS.length === 0) {
+      console.warn("⚠️ Aucune clé API trouvée dans les variables d'environnement. Assurez-vous d'avoir configuré API_KEYS sur Vercel.");
+      // On retourne une chaine vide pour ne pas faire crasher l'app au démarrage, l'erreur surviendra à l'appel
+      return "";
+  }
   const key = ALL_KEYS[currentKeyIndex];
   // Préparer l'index pour le prochain appel (Round Robin simple)
   currentKeyIndex = (currentKeyIndex + 1) % ALL_KEYS.length;
@@ -91,13 +114,16 @@ interface ScriptResponse {
 // Elle gère la création de l'instance AI avec la clé courante,
 // et tente de changer de clé en cas d'erreur 429 (Quota).
 async function runWithRotation<T>(operation: (ai: GoogleGenAI) => Promise<T>): Promise<T> {
+  if (ALL_KEYS.length === 0) {
+      throw new Error("Configuration Manquante : Aucune clé API trouvée. Ajoutez 'API_KEYS' dans les réglages Vercel.");
+  }
+
   const maxAttempts = ALL_KEYS.length * 2; // On permet de faire 2 tours de liste complets
   let attempts = 0;
   let lastError: any;
 
   while (attempts < maxAttempts) {
     // 1. Sélectionner une clé (Failover dynamique via l'index global)
-    // On utilise l'index actuel, sans l'incrémenter tout de suite, sauf en cas d'erreur
     const keyToUse = ALL_KEYS[currentKeyIndex]; 
     const ai = new GoogleGenAI({ apiKey: keyToUse });
 
@@ -244,6 +270,8 @@ const generateSingleClip = async (visualPrompt: string): Promise<string> => {
             // Since we can't easily extract the key from the 'ai' instance safely in TS, 
             // we will use the global 'ALL_KEYS[currentKeyIndex]' which corresponds to the current successful rotation.
             
+            // Note: If index rotated during wait (unlikely in single thread JS but conceptually possible), we might pick wrong key.
+            // But usually safe enough.
             const currentKey = ALL_KEYS[(currentKeyIndex === 0 ? ALL_KEYS.length : currentKeyIndex) - 1] || ALL_KEYS[currentKeyIndex]; 
 
             const separator = videoUri.includes('?') ? '&' : '?';
