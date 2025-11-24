@@ -1,54 +1,69 @@
 import { GoogleGenAI, Modality, GenerateContentResponse } from "@google/genai";
 import { MODELS, SYSTEM_INSTRUCTION_SCRIPT, RESPONSE_SCHEMA, VIRAL_HOOKS, VIRAL_CTAS } from "../constants";
 
-// --- API KEY ROTATION LOGIC ---
+// --- SAFE ENVIRONMENT ACCESS ---
 
-// Helper pour accéder à l'environnement de manière sécurisée (évite le crash "process is not defined" dans le navigateur)
-const getEnvVar = (key: string): string | undefined => {
+/**
+ * Safely retrieves environment variables in both Browser (Vite) and Server (Node) environments.
+ * Prevents "ReferenceError: process is not defined" crashes on Vercel.
+ */
+const getEnv = () => {
+  const env: Record<string, string | undefined> = {};
+
+  // 1. Vite / Browser Context (import.meta.env)
   try {
-    // Vérifie si process existe (Node.js) ou si c'est injecté par le build (Vite/Webpack)
-    if (typeof process !== 'undefined' && process.env) {
-      return process.env[key];
-    }
-    // Fallback pour certains environnements Vite récents
     // @ts-ignore
     if (typeof import.meta !== 'undefined' && import.meta.env) {
       // @ts-ignore
-      return import.meta.env[`VITE_${key}`] || import.meta.env[key];
+      env.API_KEY = import.meta.env.VITE_API_KEY || import.meta.env.API_KEY;
+      // @ts-ignore
+      env.API_KEYS = import.meta.env.VITE_API_KEYS || import.meta.env.API_KEYS;
     }
   } catch (e) {
-    return undefined;
+    // Ignore errors in environments where import.meta is not available
   }
-  return undefined;
+
+  // 2. Node.js / Vercel Serverless Context (process.env)
+  // We must access specific properties safely to allow bundlers to replace them if needed
+  try {
+    if (typeof process !== 'undefined' && process.env) {
+      if (process.env.API_KEY) env.API_KEY = process.env.API_KEY;
+      if (process.env.API_KEYS) env.API_KEYS = process.env.API_KEYS;
+    }
+  } catch (e) {
+    // Ignore ReferenceError if process is not defined
+  }
+
+  return env;
 };
 
-// Récupération des clés depuis l'environnement. 
-// Supporte soit une liste séparée par des virgules (API_KEYS), soit une clé unique (API_KEY)
+const { API_KEY, API_KEYS } = getEnv();
+
+// --- API KEY ROTATION LOGIC ---
+
 const getAvailableKeys = (): string[] => {
-  const keysString = getEnvVar('API_KEYS') || getEnvVar('API_KEY') || "";
-  return keysString.split(',').map(k => k.trim()).filter(k => k.length > 0);
+  const keys: string[] = [];
+  
+  // Prioritize list of keys
+  if (API_KEYS) {
+    keys.push(...API_KEYS.split(',').map(k => k.trim()).filter(k => k.length > 0));
+  }
+  
+  // Add single key if not already in list
+  if (API_KEY && !keys.includes(API_KEY.trim())) {
+    keys.push(API_KEY.trim());
+  }
+
+  return keys;
 };
 
 const ALL_KEYS = getAvailableKeys();
 
-// Index global pour la session (commence aléatoirement pour répartir la charge si plusieurs utilisateurs)
-let currentKeyIndex = Math.floor(Math.random() * (ALL_KEYS.length || 1));
-
-const getNextKey = (): string => {
-  if (ALL_KEYS.length === 0) {
-      console.warn("⚠️ Aucune clé API trouvée dans les variables d'environnement. Assurez-vous d'avoir configuré API_KEYS sur Vercel.");
-      // On retourne une chaine vide pour ne pas faire crasher l'app au démarrage, l'erreur surviendra à l'appel
-      return "";
-  }
-  const key = ALL_KEYS[currentKeyIndex];
-  // Préparer l'index pour le prochain appel (Round Robin simple)
-  currentKeyIndex = (currentKeyIndex + 1) % ALL_KEYS.length;
-  return key;
-};
+// Global index for session (starts random to distribute load across keys on fresh loads)
+let currentKeyIndex = ALL_KEYS.length > 0 ? Math.floor(Math.random() * ALL_KEYS.length) : 0;
 
 // --- HELPER FUNCTIONS ---
 
-// Helper: Convert Base64 string to Uint8Array
 const base64ToUint8Array = (base64: string): Uint8Array => {
   const binaryString = atob(base64);
   const len = binaryString.length;
@@ -59,7 +74,6 @@ const base64ToUint8Array = (base64: string): Uint8Array => {
   return bytes;
 };
 
-// Helper: Convert Uint8Array to Base64 string
 const uint8ArrayToBase64 = (bytes: Uint8Array): string => {
   let binary = '';
   const len = bytes.byteLength;
@@ -69,7 +83,6 @@ const uint8ArrayToBase64 = (bytes: Uint8Array): string => {
   return btoa(binary);
 };
 
-// Helper: Add WAV Header to raw PCM data
 const addWavHeader = (pcmData: Uint8Array, sampleRate: number = 24000, numChannels: number = 1): Uint8Array => {
   const header = new ArrayBuffer(44);
   const view = new DataView(header);
@@ -110,46 +123,42 @@ interface ScriptResponse {
 
 // --- SMART RETRY & ROTATION SYSTEM ---
 
-// Cette fonction encapsule les appels API. 
-// Elle gère la création de l'instance AI avec la clé courante,
-// et tente de changer de clé en cas d'erreur 429 (Quota).
 async function runWithRotation<T>(operation: (ai: GoogleGenAI) => Promise<T>): Promise<T> {
   if (ALL_KEYS.length === 0) {
-      throw new Error("Configuration Manquante : Aucune clé API trouvée. Ajoutez 'API_KEYS' dans les réglages Vercel.");
+      console.error("CRITICAL: No API Keys found.");
+      throw new Error("Configuration Manquante : Aucune clé API trouvée. Ajoutez 'API_KEYS' dans les réglages Vercel (Environment Variables).");
   }
 
-  const maxAttempts = ALL_KEYS.length * 2; // On permet de faire 2 tours de liste complets
+  const maxAttempts = ALL_KEYS.length * 2; // Try each key twice if needed
   let attempts = 0;
   let lastError: any;
 
   while (attempts < maxAttempts) {
-    // 1. Sélectionner une clé (Failover dynamique via l'index global)
     const keyToUse = ALL_KEYS[currentKeyIndex]; 
     const ai = new GoogleGenAI({ apiKey: keyToUse });
 
     try {
-      // 2. Tenter l'opération
       return await operation(ai);
     } catch (error: any) {
       const msg = error.message || JSON.stringify(error);
       const isQuotaError = msg.includes('429') || msg.includes('RESOURCE_EXHAUSTED') || msg.includes('quota');
       
       if (isQuotaError) {
-        console.warn(`⚠️ Quota hit on Key ending in ...${keyToUse.slice(-4)}. Switching project...`);
-        // 3. En cas de quota, on passe à la clé suivante IMMÉDIATEMENT
+        console.warn(`⚠️ Quota hit on Key ending in ...${keyToUse.slice(-4)}. Switching key...`);
+        // Switch to next key
         currentKeyIndex = (currentKeyIndex + 1) % ALL_KEYS.length;
         attempts++;
-        // Petit délai pour laisser respirer le réseau
-        await new Promise(r => setTimeout(r, 500)); 
+        // Small delay to allow platform to recover if transient
+        await new Promise(r => setTimeout(r, 1000)); 
       } else {
-        // Si c'est une autre erreur (ex: 500, invalid argument), on ne retry pas indéfiniment
+        // If it's not a quota error, throw immediately (e.g., Bad Request)
         throw error; 
       }
       lastError = error;
     }
   }
   
-  throw new Error(`Toutes les clés API (${ALL_KEYS.length}) ont échoué ou atteint leur quota. Dernière erreur: ${lastError?.message}`);
+  throw new Error(`Toutes les clés API (${ALL_KEYS.length}) ont échoué ou atteint leur quota (429). Dernière erreur: ${lastError?.message}`);
 }
 
 // 1. Generate Structured Script
@@ -168,18 +177,18 @@ export const generateStructuredScript = async (
         const randomCTA = VIRAL_CTAS[Math.floor(Math.random() * VIRAL_CTAS.length)];
         
         finalPrompt += `\n\n[MODE VIRAL ACTIVÉ] :
-        1. FORCE ce Hook précis pour la Scène 1 (c'est impératif) : "${randomHook}"
-        2. FORCE ce Call-To-Action précis pour la dernière scène : "${randomCTA}"
-        3. Le ton doit être CHOC, RAPIDE et PROVOCANT. Pas de phrases molles.
+        1. FORCE ce Hook précis pour la Scène 1 : "${randomHook}"
+        2. FORCE ce Call-To-Action précis pour la fin : "${randomCTA}"
+        3. Ton CHOC et RAPIDE.
         `;
     } else {
-        finalPrompt += `\n\nTon : Naturel, Engageant mais bienveillant.`;
+        finalPrompt += `\n\nTon : Naturel, Engageant.`;
     }
 
     if (injectAd) {
-      finalPrompt += `\n\nIMPORTANT: Tu DOIS générer 5 SCÈNES au total. La scène 3 DOIT être cette publicité (ne change pas les infos clés : EduEasy, edueasy.net, 0157660874, "0 échec scolaire", "0 à Héro") :\n${adContent}`;
+      finalPrompt += `\n\nIMPORTANT: Tu DOIS générer 5 SCÈNES. La scène 3 DOIT être cette pub :\n${adContent}`;
     } else {
-      finalPrompt += `\n\nGénère exactement 4 scènes pour une structure virale rapide.`;
+      finalPrompt += `\n\nGénère exactement 4 scènes.`;
     }
 
     const response = await ai.models.generateContent({
@@ -239,9 +248,6 @@ export const generateVoiceover = async (text: string): Promise<string | null> =>
 
 // 3. Generate Single Video Clip
 const generateSingleClip = async (visualPrompt: string): Promise<string> => {
-    // Note: Video generation is long, retry logic needs to be careful not to restart expensive operations too easily,
-    // but for 429 on initiation, it's fine.
-    
     return runWithRotation(async (ai) => {
         let operation = await ai.models.generateVideos({
             model: MODELS.VIDEO,
@@ -253,7 +259,6 @@ const generateSingleClip = async (visualPrompt: string): Promise<string> => {
             }
         });
 
-        // Polling loop
         while (!operation.done) {
             await new Promise(resolve => setTimeout(resolve, 5000));
             operation = await ai.operations.getVideosOperation({ operation: operation });
@@ -262,17 +267,8 @@ const generateSingleClip = async (visualPrompt: string): Promise<string> => {
         const videoUri = operation.response?.generatedVideos?.[0]?.video?.uri;
         
         if (videoUri) {
-            // We need to use the KEY used for generation to fetch the result
-            // @ts-ignore - Accessing private/internal key if possible or assume process.env
-            // Since we are inside runWithRotation, 'ai' instance has the correct key.
-            // We need to extract the key from the AI instance or pass it down.
-            // WORKAROUND: The download URL needs A key. We can use any valid key, but best to use the current one.
-            // Since we can't easily extract the key from the 'ai' instance safely in TS, 
-            // we will use the global 'ALL_KEYS[currentKeyIndex]' which corresponds to the current successful rotation.
-            
-            // Note: If index rotated during wait (unlikely in single thread JS but conceptually possible), we might pick wrong key.
-            // But usually safe enough.
-            const currentKey = ALL_KEYS[(currentKeyIndex === 0 ? ALL_KEYS.length : currentKeyIndex) - 1] || ALL_KEYS[currentKeyIndex]; 
+            // Use current key for download
+            const currentKey = ALL_KEYS[currentKeyIndex]; 
 
             const separator = videoUri.includes('?') ? '&' : '?';
             const downloadUrl = `${videoUri}${separator}key=${currentKey}`;
@@ -280,17 +276,11 @@ const generateSingleClip = async (visualPrompt: string): Promise<string> => {
             const response = await fetch(downloadUrl);
             
             if (!response.ok) {
-                // If fetching fails with 403/404, it might be the key.
                 throw new Error(`Veo download failed: ${response.status}`);
             }
             
-            const contentType = response.headers.get('content-type');
-            if (contentType && (contentType.includes('application/json') || contentType.includes('text/xml'))) {
-                const errText = await response.text();
-                throw new Error(`Veo returned non-video content: ${errText}`);
-            }
-
             const blob = await response.blob();
+            // Force MIME type for browser compatibility
             const videoBlob = new Blob([blob], { type: 'video/mp4' });
 
             return new Promise((resolve, reject) => {

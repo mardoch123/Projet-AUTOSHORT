@@ -4,10 +4,10 @@ import { CreateStudio } from './components/CreateStudio';
 import { Queue } from './components/Queue';
 import { Analytics } from './components/Analytics';
 import { ArchitectureBlueprint } from './components/ArchitectureBlueprint';
-import { PrivacyPolicy, TermsOfService } from './components/Legal'; // Import Legal Pages
+import { PrivacyPolicy, TermsOfService } from './components/Legal';
 import { VideoJob, JobStatus, FacebookPage, GamificationStats, AutomationConfig } from './types';
 import { fetchFacebookPages } from './services/analyticsService';
-import { LucideCheckCircle, LucideAlertCircle, LucideLogOut, LucideExternalLink, LucideLoader, LucideKey, LucideHelpCircle, LucideFacebook, LucideFlag, LucideCalendarClock, LucideClock, LucideShield, LucideFileText } from 'lucide-react';
+import { LucideCheckCircle, LucideLogOut, LucideExternalLink, LucideLoader, LucideKey, LucideHelpCircle, LucideFacebook, LucideFlag, LucideCalendarClock, LucideClock, LucideShield, LucideFileText } from 'lucide-react';
 
 const App: React.FC = () => {
   // --- ROUTING LOGIC (Simple path check) ---
@@ -19,25 +19,26 @@ const App: React.FC = () => {
       return () => window.removeEventListener('popstate', handlePopState);
   }, []);
 
-  // Normalize path (remove trailing slash) to ensure /privacy/ works like /privacy
+  // Normalize path (remove trailing slash)
   const normalizedPath = currentPath.endsWith('/') && currentPath.length > 1 
       ? currentPath.slice(0, -1) 
       : currentPath;
 
-  // Return Legal Pages immediately if path matches
+  // ROUTING: Return Legal Pages immediately if path matches
   if (normalizedPath === '/privacy') return <PrivacyPolicy />;
   if (normalizedPath === '/terms') return <TermsOfService />;
 
   const [activeTab, setActiveTab] = useState('create');
   
-  // 1. PERSISTENT STATE INITIALIZATION (Lazy Loading from LocalStorage)
+  // 1. PERSISTENT STATE INITIALIZATION (Lazy Loading)
   const [totalVideos, setTotalVideos] = useState(() => {
-      const saved = localStorage.getItem('autoShorts_count');
-      return saved ? parseInt(saved) : 0;
+      try {
+          const saved = localStorage.getItem('autoShorts_count');
+          return saved ? parseInt(saved) : 0;
+      } catch(e) { return 0; }
   });
 
   const [jobs, setJobs] = useState<VideoJob[]>(() => {
-      // Restore jobs if available
       try {
           const savedJobs = localStorage.getItem('autoShorts_jobs');
           return savedJobs ? JSON.parse(savedJobs) : [];
@@ -45,42 +46,40 @@ const App: React.FC = () => {
   });
   
   // Auth Tokens
-  const [tiktokToken, setTiktokToken] = useState<string | null>(() => localStorage.getItem('tiktok_token'));
-  const [youtubeToken, setYoutubeToken] = useState<string | null>(() => localStorage.getItem('youtube_token'));
-  const [facebookToken, setFacebookToken] = useState<string | null>(() => localStorage.getItem('facebook_token'));
+  const [tiktokToken, setTiktokToken] = useState<string | null>(() => { try { return localStorage.getItem('tiktok_token'); } catch(e) { return null; }});
+  const [youtubeToken, setYoutubeToken] = useState<string | null>(() => { try { return localStorage.getItem('youtube_token'); } catch(e) { return null; }});
+  const [facebookToken, setFacebookToken] = useState<string | null>(() => { try { return localStorage.getItem('facebook_token'); } catch(e) { return null; }});
   
   // User API Keys
-  const [userTiktokKey, setUserTiktokKey] = useState(() => localStorage.getItem('user_tiktok_key') || '');
-  const [userGoogleId, setUserGoogleId] = useState(() => localStorage.getItem('user_google_id') || '');
-  const [userFacebookId, setUserFacebookId] = useState(() => localStorage.getItem('user_facebook_id') || '');
+  const [userTiktokKey, setUserTiktokKey] = useState(() => { try { return localStorage.getItem('user_tiktok_key') || ''; } catch(e) { return ''; }});
+  const [userGoogleId, setUserGoogleId] = useState(() => { try { return localStorage.getItem('user_google_id') || ''; } catch(e) { return ''; }});
+  const [userFacebookId, setUserFacebookId] = useState(() => { try { return localStorage.getItem('user_facebook_id') || ''; } catch(e) { return ''; }});
   
   // Facebook Specifics
   const [facebookPages, setFacebookPages] = useState<FacebookPage[]>([]);
-  const [selectedPageId, setSelectedPageId] = useState<string | null>(() => localStorage.getItem('selected_fb_page_id'));
+  const [selectedPageId, setSelectedPageId] = useState<string | null>(() => { try { return localStorage.getItem('selected_fb_page_id'); } catch(e) { return null; }});
   
   // --- GAMIFICATION STATE ---
   const [gamification, setGamification] = useState<GamificationStats>(() => {
-      const saved = localStorage.getItem('gamification_stats');
-      return saved ? JSON.parse(saved) : { xp: 0, level: 1, streak: 0, title: 'Stagiaire' };
+      try {
+          const saved = localStorage.getItem('gamification_stats');
+          return saved ? JSON.parse(saved) : { xp: 0, level: 1, streak: 0, title: 'Stagiaire' };
+      } catch(e) { return { xp: 0, level: 1, streak: 0, title: 'Stagiaire' }; }
   });
 
   // --- AUTOMATION CONFIG STATE ---
   const [automationConfig, setAutomationConfig] = useState<AutomationConfig>(() => {
-      const saved = localStorage.getItem('automation_config');
-      // Added lastMorningRun and lastEveningRun to track recovery
-      // MODIFICATION: Active is set to TRUE by default now
-      return saved ? JSON.parse(saved) : { active: true, morningSlot: '08:00', eveningSlot: '18:00', lastMorningRun: null, lastEveningRun: null };
+      try {
+        const saved = localStorage.getItem('automation_config');
+        return saved ? JSON.parse(saved) : { active: true, morningSlot: '08:00', eveningSlot: '18:00', lastMorningRun: null, lastEveningRun: null };
+      } catch(e) { return { active: true, morningSlot: '08:00', eveningSlot: '18:00', lastMorningRun: null, lastEveningRun: null }; }
   });
 
-  // NEW: State to trigger auto-generation inside CreateStudio if we detected a missed slot
   const [pendingAutoTask, setPendingAutoTask] = useState<'morning' | 'evening' | null>(null);
-  
   const [showAuthGuide, setShowAuthGuide] = useState(false);
 
-  // 2. PERSISTENCE EFFECTS (Auto-save on change)
+  // 2. PERSISTENCE EFFECTS
   useEffect(() => { localStorage.setItem('autoShorts_count', totalVideos.toString()); }, [totalVideos]);
-  
-  // Save Jobs persistently
   useEffect(() => { localStorage.setItem('autoShorts_jobs', JSON.stringify(jobs)); }, [jobs]);
   
   useEffect(() => { 
@@ -112,43 +111,31 @@ const App: React.FC = () => {
 
   // 3. SMART CATCH-UP & AUTOMATION ENGINE
   useEffect(() => {
-      // Logic: Run immediately on mount to check if we missed a slot while the computer was off.
-      // And also setup an interval for "while open".
-      
       const checkSchedule = () => {
-          if (!automationConfig.active || pendingAutoTask) return; // Don't queue if already busy
+          if (!automationConfig.active || pendingAutoTask) return; 
 
           const now = new Date();
-          const todayString = now.toDateString(); // "Mon Sep 28 2025"
+          const todayString = now.toDateString(); 
 
-          // Parse Slots
           const [mH, mM] = automationConfig.morningSlot.split(':').map(Number);
           const [eH, eM] = automationConfig.eveningSlot.split(':').map(Number);
 
           const morningDate = new Date(); morningDate.setHours(mH, mM, 0, 0);
           const eveningDate = new Date(); eveningDate.setHours(eH, eM, 0, 0);
 
-          // CHECK MORNING SLOT
-          // If now is past morning slot AND we haven't run it today -> RUN IT (Catch-up or Scheduled)
           if (now >= morningDate && automationConfig.lastMorningRun !== todayString) {
-              console.log("⏰ Detecting Morning Slot trigger (Catch-up or Live)");
               setPendingAutoTask('morning');
-              return; // Process one at a time
+              return; 
           }
 
-          // CHECK EVENING SLOT
           if (now >= eveningDate && automationConfig.lastEveningRun !== todayString) {
-              console.log("⏰ Detecting Evening Slot trigger (Catch-up or Live)");
               setPendingAutoTask('evening');
               return;
           }
       };
 
-      // Check immediately on load (Recover from closed tab)
       checkSchedule();
-
-      // Check periodically (if tab stays open)
-      const interval = setInterval(checkSchedule, 30000); // Check every 30s
+      const interval = setInterval(checkSchedule, 30000); 
       return () => clearInterval(interval);
 
   }, [automationConfig, pendingAutoTask]);
@@ -163,10 +150,8 @@ const App: React.FC = () => {
       setPendingAutoTask(null);
   };
 
-
   // 4. OAuth Return Handling
   useEffect(() => {
-    // Check URL for OAuth Returns
     const hashParams = new URLSearchParams(window.location.hash.substring(1));
     const searchParams = new URLSearchParams(window.location.search);
 
@@ -228,7 +213,6 @@ const App: React.FC = () => {
   const handleGainXp = (amount: number) => {
       setGamification(prev => {
           const newXp = prev.xp + amount;
-          // Level up logic: Level = floor(xp / 100) + 1
           const newLevel = Math.floor(newXp / 100) + 1;
           
           let newTitle = prev.title;
@@ -242,7 +226,7 @@ const App: React.FC = () => {
               xp: newXp,
               level: newLevel,
               title: newTitle,
-              streak: prev.streak + 1 // Simplified streak logic
+              streak: prev.streak + 1
           };
       });
   };
@@ -272,7 +256,6 @@ const App: React.FC = () => {
       return j;
     }));
     
-    // XP Bonus for publishing
     handleGainXp(100);
     alert("✅ Publié avec succès ! +100 XP");
   };
@@ -372,7 +355,6 @@ const App: React.FC = () => {
           
           {activeTab === 'settings' && (
              <div className="p-8 max-w-2xl mx-auto">
-                {/* --- AUTOMATION CONFIGURATION SECTION --- */}
                 <div className="bg-slate-900 border border-emerald-500/30 rounded-xl p-6 mb-8 relative overflow-hidden">
                     <div className="absolute top-0 right-0 p-16 bg-emerald-500/5 blur-3xl rounded-full pointer-events-none"></div>
                     <div className="flex justify-between items-start mb-4">
@@ -424,13 +406,6 @@ const App: React.FC = () => {
                             )}
                         </div>
                     </div>
-                    {automationConfig.active && (
-                         <div className="mt-4 text-[10px] text-emerald-400 bg-emerald-900/10 p-3 rounded border border-emerald-900/30">
-                             <strong className="block mb-1">ℹ️ Fonctionnement "Sans Serveur" :</strong>
-                             L'application détectera automatiquement si un créneau a été manqué pendant que l'onglet était fermé (ex: ordinateur éteint).
-                             Au prochain lancement du site, elle générera <strong>immédiatement</strong> les vidéos en retard ("Catch-Up").
-                         </div>
-                    )}
                 </div>
 
                 <div className="flex justify-between items-center mb-6">
@@ -496,9 +471,6 @@ const App: React.FC = () => {
                                 className="flex-1 bg-slate-950 border border-slate-700 rounded p-2 text-white text-sm focus:border-primary-500 focus:outline-none"
                             />
                         </div>
-                     </div>
-                     <div className="text-xs text-slate-500 italic text-center">
-                        Vos clés sont sauvegardées localement dans ce navigateur.
                      </div>
                 </div>
                 
@@ -586,7 +558,6 @@ const App: React.FC = () => {
                             )}
                        </div>
                        
-                       {/* Facebook Page Selection - Only visible when connected */}
                        {facebookToken && (
                            <div className="border-t border-slate-700 p-4 bg-slate-900/50">
                                <label className="block text-xs font-bold text-slate-400 uppercase mb-3 flex items-center">
@@ -618,13 +589,9 @@ const App: React.FC = () => {
                                        ))}
                                    </div>
                                )}
-                               <p className="text-[10px] text-slate-500 mt-2 italic">
-                                   * La sélection est mémorisée automatiquement.
-                               </p>
                            </div>
                        )}
                    </div>
-
                 </div>
 
                 <div className="mt-8 pt-6 border-t border-slate-800 flex justify-between text-xs text-slate-500">
