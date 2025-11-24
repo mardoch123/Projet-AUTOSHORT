@@ -8,33 +8,33 @@ import { MODELS, SYSTEM_INSTRUCTION_SCRIPT, RESPONSE_SCHEMA, VIRAL_HOOKS, VIRAL_
  * Prevents "ReferenceError: process is not defined" crashes on Vercel.
  */
 const getEnv = () => {
-  const env: Record<string, string | undefined> = {};
+  let apiKey = '';
+  let apiKeys = '';
 
   // 1. Vite / Browser Context (import.meta.env)
   try {
     // @ts-ignore
     if (typeof import.meta !== 'undefined' && import.meta.env) {
       // @ts-ignore
-      env.API_KEY = import.meta.env.VITE_API_KEY || import.meta.env.API_KEY;
+      apiKey = import.meta.env.VITE_API_KEY || import.meta.env.API_KEY || '';
       // @ts-ignore
-      env.API_KEYS = import.meta.env.VITE_API_KEYS || import.meta.env.API_KEYS;
+      apiKeys = import.meta.env.VITE_API_KEYS || import.meta.env.API_KEYS || '';
     }
   } catch (e) {
     // Ignore errors in environments where import.meta is not available
   }
 
   // 2. Node.js / Vercel Serverless Context (process.env)
-  // We must access specific properties safely to allow bundlers to replace them if needed
   try {
     if (typeof process !== 'undefined' && process.env) {
-      if (process.env.API_KEY) env.API_KEY = process.env.API_KEY;
-      if (process.env.API_KEYS) env.API_KEYS = process.env.API_KEYS;
+      if (!apiKey) apiKey = process.env.API_KEY || process.env.VITE_API_KEY || '';
+      if (!apiKeys) apiKeys = process.env.API_KEYS || process.env.VITE_API_KEYS || '';
     }
   } catch (e) {
     // Ignore ReferenceError if process is not defined
   }
 
-  return env;
+  return { API_KEY: apiKey, API_KEYS: apiKeys };
 };
 
 const { API_KEY, API_KEYS } = getEnv();
@@ -50,7 +50,7 @@ const getAvailableKeys = (): string[] => {
   }
   
   // Add single key if not already in list
-  if (API_KEY && !keys.includes(API_KEY.trim())) {
+  if (API_KEY && !keys.includes(API_KEY.trim()) && API_KEY.trim().length > 0) {
     keys.push(API_KEY.trim());
   }
 
@@ -124,9 +124,12 @@ interface ScriptResponse {
 // --- SMART RETRY & ROTATION SYSTEM ---
 
 async function runWithRotation<T>(operation: (ai: GoogleGenAI) => Promise<T>): Promise<T> {
+  // Check if we have any environment keys
   if (ALL_KEYS.length === 0) {
-      console.error("CRITICAL: No API Keys found.");
-      throw new Error("Configuration Manquante : Aucune clé API trouvée. Ajoutez 'API_KEYS' dans les réglages Vercel (Environment Variables).");
+      // Try to fallback to localStorage user keys if implemented, otherwise throw
+      console.warn("⚠️ No Environment API Keys found. Checking Client-Side settings...");
+      // For now, we throw, but the UI catches this to show "Select Key" dialog
+      throw new Error("Configuration Manquante : Aucune clé API trouvée. Ajoutez 'API_KEYS' dans Vercel ou utilisez le bouton 'Configuration API'.");
   }
 
   const maxAttempts = ALL_KEYS.length * 2; // Try each key twice if needed
