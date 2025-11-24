@@ -1,0 +1,5 @@
+{
+  "name": "AutoShorts AI",
+  "description": "Automated SaaS platform for generating and publishing short-form video content (Reels, TikTok, Shorts) using Google Veo and Gemini models.",
+  "requestFramePermissions": []
+}
